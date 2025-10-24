@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>SRSS PROFESSORES</title>
+<style>
+  :root{--bg:#0f172a;--card:#111827;--line:#1f2937;--text:#e5e7eb;--muted:#94a3b8;--pri:#4f46e5;--ok:#22c55e;--err:#ef4444}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto}
+  .wrap{max-width:1000px;margin:24px auto;padding:0 16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
+  h1{margin:0 0 6px;font-size:1.35rem}
+  .muted{color:var(--muted)}
+  .grid-info{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0 6px}
+  @media(max-width:720px){.grid-info{grid-template-columns:1fr}}
+  .info{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:10px}
+  .info b{display:block;margin-bottom:4px;color:#cbd5e1}
+  .q{border:1px solid var(--line);border-radius:12px;padding:12px;background:#0b1220;margin-bottom:10px}
+  .q h3{margin:0 0 8px;font-size:1rem}
+  .opts{display:flex;flex-wrap:wrap;gap:10px}
+  label.opt{display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;cursor:pointer}
+  .opt input[type="radio"]{accent-color:var(--pri)}
+  /* bloco inteiro azul quando marcado */
+  label.opt:has(input[type="radio"]:checked){ background:var(--pri); border-color:var(--pri); color:#fff; }
+  label.opt:has(input[type="radio"]:checked) span{ color:#fff; font-weight:600; }
+  label.opt:has(input[type="radio"]:focus-visible){ box-shadow:0 0 0 3px rgba(79,70,229,.35); border-color:var(--pri); }
+  .btn{display:inline-flex;align-items:center;gap:8px;background:var(--pri);border:none;color:#fff;padding:10px 14px;border-radius:10px;cursor:pointer}
+  .btn.ok{background:var(--ok)}
+  .btn:disabled{opacity:.6;cursor:not-allowed}
+  .msg{margin:10px 0;padding:10px;border-radius:8px}
+  .okbox{background:#052e1a;border:1px solid #114d2a;color:#b3f7c1}
+  .errbox{background:#3b0d0d;border:1px solid #5b1919;color:#ffd0d0}
+  .warnbox{background:#3a2903;border:1px solid #5c4307;color:#ffe6b0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>Inventário de Habilidades Sociais, Problemas de Comportamento e Competências Acadêmicas</h1>
+    <p class="muted">
+    As respostas serão enviadas diretamente para a profissional responsável pela avaliação.  
+    </p>
+
+    <div id="pacInfo" class="grid-info" style="display:none;"></div>
+
+    <form id="form" style="margin-top:14px; display:none;">
+      <div id="qs"></div>
+      <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
+        <button id="btnSubmit" class="btn ok" type="submit">Enviar respostas</button>
+        <div id="progress" class="muted"></div>
+      </div>
+      <div id="msg" class="msg" style="display:none"></div>
+    </form>
+
+    <div id="alert" class="msg" style="display:none"></div>
+  </div>
+</div>
+
+<script>
+// ======== CONFIG ========
+const SHEETDB_BASE = "https://sheetdb.io/api/v1/8pmdh33s9fvy8";
+const SHEETS = { PATIENTS:"Patients", TOKENS:"LinkTokens", SCORES:"Scores_SRSS_PROFESSORES" };
+const CODE = "SRSS_PROFESSORES";
+const PORTAL_URL = "https://integradaneuropsicologia.github.io/formularios/";
+
+// ======== HELPERS ========
+const $ = s => document.querySelector(s);
+const onlyDigits = s => (s||"").replace(/\D+/g,"");
+const qs = k => new URLSearchParams(location.search).get(k) || "";
+const AUTOSAVE_KEY = `${CODE}_${qs("token")||"no_token"}`;
+
+function setBox(id, text, kind="ok"){ const el=$(id); if(!el) return;
+  el.textContent=text; el.className="msg "+(kind==="ok"?"okbox":kind==="warn"?"warnbox":"errbox"); el.style.display="block";
+}
+function hideBox(id){ const el=$(id); if(el){ el.style.display="none"; el.textContent=""; } }
+function maskCPF(cpf){ const d=onlyDigits(cpf||""); if(d.length!==11) return cpf||""; return `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6,9)}-${d.slice(9)}`; }
+function fmtDateISO(iso){ if(!iso) return ""; const [y,m,d]=iso.split("-"); return (y&&m&&d)?`${d}/${m}/${y}`:iso; }
+async function GET(url){ const r=await fetch(url); if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); }
+async function POST(url, body){ const r=await fetch(url,{method:"POST",headers:{ "Content-Type":"application/json" },body:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function PATCH(url, body){ const r=await fetch(url,{method:"PATCH",headers:{ "Content-Type":"application/json" },body:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function sheetSearch(sheet, params){ const usp=new URLSearchParams(params); return GET(`${SHEETDB_BASE}/search?sheet=${encodeURIComponent(sheet)}&${usp.toString()}`); }
+async function sheetCreate(sheet, row){ return POST(`${SHEETDB_BASE}?sheet=${encodeURIComponent(sheet)}`, { data:[row] }); }
+async function sheetPatchBy(sheet, column, value, data){ return PATCH(`${SHEETDB_BASE}/${encodeURIComponent(column)}/${encodeURIComponent(value)}?sheet=${encodeURIComponent(sheet)}`, { data }); }
+function goPortalWithToken(){ const TOKEN=qs("token"); try{ const u=new URL(PORTAL_URL,location.href); u.searchParams.set("token",TOKEN); location.href=u.toString(); }catch(_){ const sep=PORTAL_URL.includes("?")?"&":"?"; location.href=PORTAL_URL+sep+"token="+encodeURIComponent(TOKEN); }}
+
+// ======== ITENS ========
+const ITEMS = [
+  "Controla a irritação em situações de conflito com colegas.",
+  "Apresenta-se a novas pessoas sem precisar mandar.",
+  "Questiona de forma educada as regras que considera injustas.",
+  "Reage de forma apropriada à pressão dos colegas.",
+  "Diz coisas boas sobre si mesmo(a) quando a situação é apropriada.",
+  "Termina as tarefas de classe no tempo estabelecido.",
+  "Faz amigos facilmente.",
+  "Responde apropriadamente a gozações dos colegas.",
+  "Controla a irritação em situações de conflito com adultos.",
+  "Faz corretamente as tarefas escolares.",
+  "Defende-se verbalmente quando acha que você o(a) tratou de forma injusta.",
+  "Aceita ideias dos colegas em atividades grupais.",
+  "Segue suas instruções.",
+  "Guarda o material ou objetos escolares.",
+  "Coopera com os colegas sem ter que lhe pedir.",
+  "Ajuda voluntariamente os colegas nas tarefas de classe.",
+  "Junta-se a um grupo ou atividade em curso sem que lhe peçam.",
+  "Responde de forma apropriada quando é empurrado ou provocado por outras crianças.",
+  "Ignora distrações dos colegas durante as tarefas de classe.",
+  "Mantém a carteira limpa e arrumada sem que alguém precise lembrá-lo(a).",
+  "Presta atenção às suas instruções.",
+  "Se dá bem com as pessoas que são diferentes.",
+  "Briga com os outros.",
+  "Tem baixa autoestima.",
+  "Ameaça ou intimida os outros.",
+  "Parece solitário(a).",
+  "Interrompe a conversa dos outros.",
+  "Perturba as atividades em andamento.",
+  "Demonstra ansiedade quanto a estar com um grupo de crianças.",
+  "Não ouve o que os outros dizem.",
+  "Discute com os outros.",
+  "Retruca quando os adultos lhe corrigem.",
+  "Fica com raiva facilmente.",
+  "Tem ataques de birra.",
+  "Mostra-se triste ou deprimido(a).",
+  "Mostra-se irrequieto ou se mexe excessivamente.",
+  "Comparado com outras crianças de minha classe, o desempenho acadêmico geral desta criança está:",
+  "Em leitura, como esta criança se situa em relação às demais?",
+  "Em matemática, como esta criança se situa em relação às demais?",
+  "Em termos da expectativa para este nível ou grau, a habilidade de leitura desta criança está:",
+  "Em termos da expectativa para este nível ou grau, a habilidade em matemática desta criança está:",
+  "A motivação geral desta criança para o êxito acadêmico está:",
+  "O estímulo dos pais para o êxito acadêmico desta criança está:",
+  "Comparada com outras crianças de minha sala, o funcionamento intelectual desta criança está:",
+  "Comparada com outras crianças de minha sala, o comportamento geral desta criança em classe está:"
+];
+const N = ITEMS.length;
+
+// Escalas de resposta
+const CHOICES_A = [
+  {label:"Nunca", value:0},
+  {label:"Algumas vezes", value:1},
+  {label:"Muito frequente", value:2},
+];
+const CHOICES_B = [
+  {label:"Entre os 10% piores", value:1},
+  {label:"Entre os 20% piores", value:2},
+  {label:"Entre os 40% médios", value:3},
+  {label:"Entre os 20% bons", value:4},
+  {label:"Entre os 10% ótimos", value:5},
+];
+
+// ======== AGRUPAMENTOS ========
+const range=(a,b)=>Array.from({length:b-a+1},(_,k)=>a+k);
+
+const HABILIDADES = {
+  F1: [6,10,13,14,20,21],
+  F2: [1,4,8,9,12,18,19,22],
+  F3: [2,3,5,7,11],
+  F4: [15,16,17],
+};
+const PROB_COMPORT = {
+  F1: [23,25,31,32,33,34],
+  F2: [27,28,30,36],
+  F3: [24,26,29,35],
+};
+const COMP_ACAD = range(37,45);
+
+// ======== RENDER ========
+function renderQuestions(){
+  const host=$("#qs"); host.innerHTML="";
+  ITEMS.forEach((text, idx)=>{
+    const n=idx+1, qn=String(n).padStart(2,"0");
+    const wrap=document.createElement("div");
+    wrap.className="q"; wrap.setAttribute("role","group"); wrap.setAttribute("aria-labelledby",`lbl${qn}`);
+    wrap.innerHTML = `<h3 id="lbl${qn}">${n}. ${text}</h3>`;
+    const opts=document.createElement("div"); opts.className="opts";
+    const CHS = n<=36 ? CHOICES_A : CHOICES_B;
+    CHS.forEach((c,i)=>{
+      const id=`q${qn}_${i}`;
+      const lab=document.createElement("label"); lab.className="opt";
+      lab.innerHTML=`<input type="radio" name="q${qn}" id="${id}" value="${c.value}" required><span>${c.label}</span>`;
+      opts.appendChild(lab);
+    });
+    wrap.appendChild(opts); host.appendChild(wrap);
+  });
+
+  const updateProg=()=>{
+    const answered=document.querySelectorAll('#qs input[type="radio"]:checked').length;
+    $("#progress").textContent=`${answered}/${N} respondidas`;
+  };
+  host.addEventListener("change", ()=>{ updateProg(); autosaveAnswers(); });
+  updateProg();
+}
+
+// ======== AUTOSAVE ========
+function autosaveAnswers(){
+  const answers={};
+  for(let i=1;i<=N;i++){
+    const qn=`q${String(i).padStart(2,"0")}`;
+    const sel=document.querySelector(`input[name="${qn}"]:checked`);
+    if(sel) answers[i]=Number(sel.value);
+  }
+  localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ code: CODE, token: qs("token"), answers }));
+}
+function restoreAutosave(){
+  try{
+    const raw=localStorage.getItem(AUTOSAVE_KEY); if(!raw) return;
+    const {answers}=JSON.parse(raw)||{}; if(!answers) return;
+    Object.entries(answers).forEach(([i,val])=>{
+      const qn=String(i).padStart(2,"0");
+      const el=document.querySelector(`input[name="q${qn}"][value="${val}"]`);
+      if(el) el.checked=true;
+    });
+    const answered=Object.keys(answers).length;
+    $("#progress").textContent=`${answered}/${N} respondidas`;
+  }catch(_){}
+}
+function clearAutosave(){ localStorage.removeItem(AUTOSAVE_KEY); }
+
+// ======== ESTADO ========
+let patient=null, tokenRow=null, CPF="";
+let startAt = Date.now();
+
+// ======== BOOT POR TOKEN ========
+(async function boot(){
+  try{
+    const TOKEN=qs("token");
+    if(!TOKEN){ setBox("#alert","Link inválido (sem token). Solicite um novo link.","err"); return; }
+
+    const trows=await sheetSearch(SHEETS.TOKENS,{ token:TOKEN });
+    if(!trows?.length) throw new Error("Token inválido ou expirado.");
+    tokenRow=trows[0];
+    const disabled=String(tokenRow.disabled||"não").toLowerCase()==="sim";
+    const expired = tokenRow.expires_at && (Date.parse(tokenRow.expires_at) < Date.now());
+    if(disabled || expired) throw new Error("Token desativado/expirado. Peça um novo link.");
+
+    CPF=onlyDigits(tokenRow.cpf||"");
+    if(!CPF) throw new Error("Token sem CPF vinculado.");
+
+    const prows=await sheetSearch(SHEETS.PATIENTS,{ cpf:CPF });
+    if(!prows?.length) throw new Error("Paciente não encontrado.");
+    patient=prows[0];
+
+    const allowed=String(patient[CODE]||"").toLowerCase()==="sim";
+    if(!allowed){ setBox("#alert","Este formulário não está liberado para você. Entre em contato com o consultório.","err"); return; }
+
+    const flagDone=String(patient[`${CODE}_FEITO`]||"").toLowerCase()==="sim";
+    const already=await sheetSearch(SHEETS.SCORES,{ cpf:CPF, code:CODE });
+    if(flagDone || (already && already.length)){
+      setBox("#alert","Você já respondeu este formulário. Voltando ao portal…","ok");
+      setTimeout(goPortalWithToken,1200); return;
+    }
+
+    renderPatientInfo();
+    renderQuestions();
+    $("#pacInfo").style.display="grid";
+    $("#form").style.display="block";
+    hideBox("#alert");
+    startAt=Date.now();
+    restoreAutosave();
+
+  }catch(err){
+    console.error(err);
+    setBox("#alert", err.message || "Falha ao abrir o formulário. Tente novamente mais tarde.", "err");
+  }
+})();
+
+function renderPatientInfo(){
+  const g=$("#pacInfo"); g.innerHTML="";
+  const info=[["Nome",patient.nome||"-"],["CPF",maskCPF(patient.cpf)],["Nascimento",fmtDateISO(patient.data_nascimento)],["E-mail",patient.email||"-"],["WhatsApp",patient.whatsapp||"-"]];
+  for(const [k,v] of info){
+    const d=document.createElement("div"); d.className="info";
+    d.innerHTML=`<b>${k}</b><div>${v||"-"}</div>`;
+    g.appendChild(d);
+  }
+}
+
+// ======== CÁLCULO ========
+function sumList(list, answers){
+  return (list||[]).reduce((s,i)=> s + (answers[i] ?? 0), 0);
+}
+function buildCategoriaText(scores){
+  // Habilidades sociais
+  const hsF1 = scores.hs.F1, hsF2 = scores.hs.F2, hsF3 = scores.hs.F3, hsF4 = scores.hs.F4;
+  const hsTotal = hsF1 + hsF2 + hsF3 + hsF4;
+  // Problemas de comportamento
+  const pcF1 = scores.pc.F1, pcF2 = scores.pc.F2, pcF3 = scores.pc.F3;
+  const pcGeral = pcF1 + pcF2 + pcF3;
+  // Competência acadêmica
+  const ca = scores.ca;
+
+  return [
+    `Habilidades sociais — F1:${hsF1} F2:${hsF2} F3:${hsF3} F4:${hsF4} | Escala total: ${hsTotal}`,
+    `Problemas de comportamento — F1:${pcF1} F2:${pcF2} F3:${pcF3} | Geral: ${pcGeral}`,
+    `Competência acadêmica: ${ca}`
+  ].join(" | ");
+}
+
+// ======== SUBMIT ========
+let sending=false;
+$("#form").addEventListener("submit", async (e)=>{
+  e.preventDefault();
+  if(sending) return; sending=true; hideBox("#msg");
+  const btn=$("#btnSubmit"); const originalText=btn.textContent; btn.disabled=true; btn.textContent="Enviando…";
+
+  try{
+    if(!patient) throw new Error("Sessão inválida. Recarregue o link.");
+
+    // coleta
+    const answers={}; let firstMissing=null;
+    for(let i=1;i<=N;i++){
+      const qn=`q${String(i).padStart(2,"0")}`;
+      const sel=document.querySelector(`input[name="${qn}"]:checked`);
+      if(!sel && firstMissing===null) firstMissing=i;
+      if(sel) answers[i]=Number(sel.value);
+    }
+    if(firstMissing){
+      setBox("#msg", `Responda o item ${firstMissing}.`, "warn");
+      document.getElementById(`lbl${String(firstMissing).padStart(2,"0")}`)?.scrollIntoView({behavior:"smooth",block:"center"});
+      sending=false; btn.disabled=false; btn.textContent=originalText; return;
+    }
+
+    // anti-duplicidade
+    const again=await sheetSearch(SHEETS.SCORES,{ cpf:onlyDigits(patient.cpf), code:CODE });
+    if(again && again.length){
+      setBox("#msg","Este formulário já foi enviado anteriormente. Voltando ao portal…","ok");
+      setTimeout(goPortalWithToken, 1000); return;
+    }
+
+    // somas
+    const scores = {
+      hs: {
+        F1: sumList(HABILIDADES.F1, answers),
+        F2: sumList(HABILIDADES.F2, answers),
+        F3: sumList(HABILIDADES.F3, answers),
+        F4: sumList(HABILIDADES.F4, answers),
+      },
+      pc: {
+        F1: sumList(PROB_COMPORT.F1, answers),
+        F2: sumList(PROB_COMPORT.F2, answers),
+        F3: sumList(PROB_COMPORT.F3, answers),
+      },
+      ca: sumList(COMP_ACAD, answers)
+    };
+    const categoria = buildCategoriaText(scores);
+
+    const durationSec = Math.round((Date.now()-startAt)/1000);
+    const totalAll = Object.values(answers).reduce((s,v)=>s+v,0);
+
+    const row = {
+      result_id:`${patient.cpf}_${CODE}_${Date.now()}`,
+      token:qs("token"),
+      cpf:patient.cpf,
+      code:CODE,
+      source:"paciente",
+      submitted_at:new Date().toISOString(),
+      total: totalAll,
+      categoria, // <- tudo o que você pediu vai aqui
+      metrics: JSON.stringify({ answers, scores, duration_sec: durationSec })
+    };
+    await sheetCreate(SHEETS.SCORES,row);
+    await sheetPatchBy(SHEETS.PATIENTS,"cpf",patient.cpf,{ [`${CODE}_FEITO`]:"sim", [`${CODE}_FEITO_AT`]: new Date().toISOString() });
+
+    clearAutosave();
+    setBox("#msg","Formulário enviado. Retornando ao portal…","ok");
+    setTimeout(goPortalWithToken, 1200);
+
+  }catch(err){
+    console.error(err);
+    setBox("#msg", err.message || "Falha ao enviar. Tente novamente.", "err");
+    sending=false; btn.disabled=false; btn.textContent=originalText;
+  }
+});
+</script>
+</body>
+</html>
