@@ -85,6 +85,7 @@
   .errbox{background:#3b0d0d;border:1px solid #5b1919;color:#ffd0d0}
   .warnbox{background:#3a2903;border:1px solid #5c4307;color:#ffe6b0}
 </style>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 <div class="wrap">
@@ -110,16 +111,13 @@
 </div>
 
 <script>
-// ======== CONFIG ========
-const SHEETDB_BASE = "https://sheetdb.io/api/v1/8pmdh33s9fvy8";
-const SHEETS = {
-  PATIENTS:"Patients",
-  TOKENS:"LinkTokens",
-  SCORES:"Scores_SRSS_PROFESSORES"
-};
-const CODE = "SRSS_PROFESSORES";
-const PORTAL_URL = "https://integradaneuropsicologia.github.io/formularios/";
-
+// ======== CONFIG SUPABASE ========
+const SUPABASE_URL = "https://ydypdeafbcdcamwigjuq.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_lg9teAniku65cd2dnZJvIQ_Zii0XneZ";
+const TEST_CODE_FIXO = "SRSS_PROFESSORES_V2";
+const CODE = TEST_CODE_FIXO;
+const AREA_PACIENTE_URL = "https://integradaneuropsicologia.github.io/area-do-paciente-v2/";
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 // ======== HELPERS ========
 const $ = s => document.querySelector(s);
 const onlyDigits = s => (s||"").replace(/\D+/g,"");
@@ -150,53 +148,133 @@ function fmtDateISO(iso){
   const [y,m,d]=String(iso).split("-");
   return (y&&m&&d)?`${d}/${m}/${y}`:iso;
 }
-async function GET(url){
-  const r=await fetch(url);
-  if(!r.ok) throw new Error("HTTP "+r.status);
-  return r.json();
-}
-async function POST(url, body){
-  const r=await fetch(url,{
-    method:"POST",
-    headers:{ "Content-Type":"application/json" },
-    body:JSON.stringify(body)
-  });
-  if(!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-async function PATCH(url, body){
-  const r=await fetch(url,{
-    method:"PATCH",
-    headers:{ "Content-Type":"application/json" },
-    body:JSON.stringify(body)
-  });
-  if(!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-async function sheetSearch(sheet, params){
-  const usp=new URLSearchParams(params);
-  return GET(`${SHEETDB_BASE}/search?sheet=${encodeURIComponent(sheet)}&${usp.toString()}`);
-}
-async function sheetCreate(sheet, row){
-  return POST(`${SHEETDB_BASE}?sheet=${encodeURIComponent(sheet)}`, { data:[row] });
-}
-async function sheetPatchBy(sheet, column, value, data){
-  return PATCH(
-    `${SHEETDB_BASE}/${encodeURIComponent(column)}/${encodeURIComponent(value)}?sheet=${encodeURIComponent(sheet)}`,
-    { data }
-  );
-}
 function goPortalWithToken(){
+  redirectToAreaPaciente();
+}
+function redirectToAreaPaciente(cpf){
   try{
-    const u=new URL(PORTAL_URL,location.href);
-    if(TOKEN) u.searchParams.set("token",TOKEN);
-    location.href=u.toString();
+    const u = new URL(AREA_PACIENTE_URL, location.href);
+    const token = getTokenFromUrl();
+    if(token) u.searchParams.set("token", token);
+    else if(cpf) u.searchParams.set("cpf", normalizeCPF(cpf));
+    location.href = u.toString();
   }catch(_){
-    const sep=PORTAL_URL.includes("?")?"&":"?";
-    location.href=PORTAL_URL + (TOKEN ? sep+"token="+encodeURIComponent(TOKEN) : "");
+    const token = getTokenFromUrl();
+    const sep = AREA_PACIENTE_URL.includes("?") ? "&" : "?";
+    location.href = AREA_PACIENTE_URL + (token ? sep + "token=" + encodeURIComponent(token) : "");
   }
 }
-
+function normalizeCPF(cpf){ return String(cpf || "").replace(/\D/g, ""); }
+function getTokenFromUrl(){
+  const params = new URLSearchParams(location.search);
+  return String(params.get("token") || params.get("t") || TOKEN || "").trim();
+}
+function getTestCodeFromUrl(){
+  const params = new URLSearchParams(location.search);
+  return String(params.get("form") || params.get("code") || TEST_CODE_FIXO).trim();
+}
+function isObject(v){ return v && typeof v === "object" && !Array.isArray(v); }
+function containsTestCode(jsonb, testCode){
+  if(!jsonb) return false;
+  if(typeof jsonb === "string") return jsonb === testCode;
+  if(Array.isArray(jsonb)){
+    return jsonb.some(item => {
+      if(typeof item === "string") return item === testCode;
+      if(isObject(item)) return item.code === testCode || item.test_code === testCode || item.id === testCode || containsTestCode(item, testCode);
+      return false;
+    });
+  }
+  if(isObject(jsonb)){
+    if(Object.prototype.hasOwnProperty.call(jsonb, testCode)){
+      const value = jsonb[testCode];
+      return value !== false && value !== null && value !== undefined;
+    }
+    if(jsonb.code === testCode || jsonb.test_code === testCode || jsonb.id === testCode) return true;
+    return Object.values(jsonb).some(v => containsTestCode(v, testCode));
+  }
+  return false;
+}
+function isTestLiberado(testsLiberados, testCode){
+  if(!containsTestCode(testsLiberados, testCode)) return false;
+  if(isObject(testsLiberados) && Object.prototype.hasOwnProperty.call(testsLiberados, testCode)){
+    const v = testsLiberados[testCode];
+    if(typeof v === "boolean") return v;
+    if(isObject(v) && "liberado" in v) return Boolean(v.liberado);
+    if(typeof v === "string") return !["false", "0", "nao", "não"].includes(v.toLowerCase());
+    return Boolean(v);
+  }
+  return true;
+}
+function isTestFeito(testsFeitos, testCode){
+  if(!containsTestCode(testsFeitos, testCode)) return false;
+  if(isObject(testsFeitos) && Object.prototype.hasOwnProperty.call(testsFeitos, testCode)){
+    const v = testsFeitos[testCode];
+    if(typeof v === "boolean") return v;
+    if(isObject(v) && "feito" in v) return Boolean(v.feito);
+    if(typeof v === "string") return !["false", "0", "nao", "não"].includes(v.toLowerCase());
+    return Boolean(v);
+  }
+  return true;
+}
+function normalizeTestsFeitosForSave(current){
+  const out = {};
+  if(!current) return out;
+  if(typeof current === "string") { out[current] = true; return out; }
+  if(Array.isArray(current)){
+    current.forEach(item => {
+      if(typeof item === "string") out[item] = true;
+      else if(isObject(item)) out[item.code || item.test_code || item.id || JSON.stringify(item)] = item;
+    });
+    return out;
+  }
+  if(isObject(current)) return { ...current };
+  return out;
+}
+function buildUpdatedTestsFeitos(current, testCode, submittedAt){
+  const out = normalizeTestsFeitosForSave(current);
+  out[testCode] = { feito: true, submitted_at: submittedAt };
+  return out;
+}
+async function getPatientFormAccessByToken(){
+  const token = getTokenFromUrl();
+  const testCode = getTestCodeFromUrl();
+  if(!token || !testCode) return { data: null, error: new Error("Link invalido ou formulario nao informado.") };
+  const { data, error } = await supabaseClient.rpc("get_public_patient_form_access", {
+    p_token: token,
+    p_form_code: testCode
+  });
+  if(error) return { data: null, error };
+  return { data: Array.isArray(data) ? data[0] : data, error: null };
+}
+async function validarAcessoAoTeste(){
+  const token = getTokenFromUrl();
+  const testCode = getTestCodeFromUrl();
+  if(!token){
+    setBox("#alert", "Link inválido ou expirado. Abra o formulário pela área do paciente.", "err");
+    return null;
+  }
+  setBox("#alert", "Validando acesso ao formulário...", "warn");
+  const { data, error } = await getPatientFormAccessByToken();
+  if(error){
+    console.error(error);
+    setBox("#alert", "Não foi possível validar o acesso ao formulário.", "err");
+    return null;
+  }
+  if(!data){
+    setBox("#alert", "Token inválido, expirado ou sem CPF vinculado.", "err");
+    return null;
+  }
+  if(!isTestLiberado(data.tests_liberados, testCode)){
+    setBox("#alert", "Este formulário não está liberado para você.", "err");
+    return null;
+  }
+  if(isTestFeito(data.tests_feitos, testCode)){
+    setBox("#alert", "Você já respondeu este formulário. Voltando ao portal...", "ok");
+    setTimeout(() => redirectToAreaPaciente(data.cpf), 1000);
+    return null;
+  }
+  return data;
+}
 // ======== ITENS ========
 const ITEMS = [
   "Controla a irritação em situações de conflito com colegas.",
@@ -402,63 +480,26 @@ function clearAutosave(){
   try{ localStorage.removeItem(AUTOSAVE_KEY); }catch(_){}
 }
 
-// ======== ESTADO ========
-let patient=null, tokenRow=null, CPF="";
+/* ======== ESTADO GERAL ======== */
+let patient = null, tokenRow = null, CPF = "";
 let startAt = Date.now();
 
-// ======== BOOT (token gate etc.) ========
+/* ======== BOOT SUPABASE ======== */
 (async function boot(){
   try{
-    if(!TOKEN){
-      setBox("#alert","Link inválido (sem token). Solicite um novo link.","err");
-      return;
-    }
+    const access = await validarAcessoAoTeste();
+    if(!access) return;
+    patient = access;
+    CPF = normalizeCPF(access.cpf);
 
-    // Token
-    const trows=await sheetSearch(SHEETS.TOKENS,{ token:TOKEN });
-    if(!trows?.length) throw new Error("Token inválido ou expirado.");
-    tokenRow=trows[0];
-
-    const disabled = String(tokenRow.disabled||"não").toLowerCase()==="sim";
-    const expired  = tokenRow.expires_at && (Date.parse(tokenRow.expires_at) < Date.now());
-    if(disabled || expired){
-      throw new Error("Token desativado/expirado. Peça um novo link.");
-    }
-
-    // Paciente
-    CPF=onlyDigits(tokenRow.cpf||"");
-    if(!CPF) throw new Error("Token sem CPF vinculado.");
-
-    const prows=await sheetSearch(SHEETS.PATIENTS,{ cpf:CPF });
-    if(!prows?.length) throw new Error("Paciente não encontrado.");
-    patient=prows[0];
-
-    // Liberação
-    const allowed=String(patient[CODE]||"").trim().toLowerCase()==="sim";
-    if(!allowed){
-      setBox("#alert","Este formulário não está liberado para você. Entre em contato com o consultório.","err");
-      return;
-    }
-
-    // Já fez?
-    const flagDone=String(patient[`${CODE}_FEITO`]||"").trim().toLowerCase()==="sim";
-    const already=await sheetSearch(SHEETS.SCORES,{ cpf:CPF, code:CODE });
-    if(flagDone || (already && already.length)){
-      setBox("#alert","Você já respondeu este formulário. Voltando ao portal…","ok");
-      setTimeout(goPortalWithToken,1200);
-      return;
-    }
-
-    // Render UI
     renderPatientInfo();
     renderQuestions();
-    $("#pacInfo").style.display="grid";
-    $("#form").style.display="block";
+    document.querySelector("#pacInfo").style.display = "grid";
+    document.querySelector("#form").style.display = "block";
     hideBox("#alert");
 
     startAt = Date.now();
     restoreAutosave();
-
   }catch(err){
     console.error(err);
     setBox("#alert", err.message || "Falha ao abrir o formulário. Tente novamente mais tarde.", "err");
@@ -466,128 +507,150 @@ let startAt = Date.now();
 })();
 
 function renderPatientInfo(){
-  const g=$("#pacInfo"); g.innerHTML="";
-  const info=[
-    ["Nome",patient.nome||"-"],
-    
-    ["Nascimento",fmtDateISO(patient.data_nascimento)]
-   
+  const g = document.querySelector("#pacInfo");
+  g.innerHTML = "";
+  const info = [
+    ["Nome", patient.nome || "-"],
+    ["Nascimento", fmtDateISO(patient.data_nascimento)]
   ];
-  for(const [k,v] of info){
-    const d=document.createElement("div");
-    d.className="info";
-    d.innerHTML=`<b>${k}</b><div>${v||"-"}</div>`;
+  for(const [k, v] of info){
+    const d = document.createElement("div");
+    d.className = "info";
+    d.innerHTML = `<b>${k}</b><div>${v || "-"}</div>`;
     g.appendChild(d);
   }
 }
 
-/* ===== SUBMIT ===== */
-let sending=false;
-$("#form").addEventListener("submit", async (e)=>{
+/* ======== SUBMIT SUPABASE ======== */
+let sending = false;
+
+function choicesForItem(index){
+  if(typeof CHOICES_A !== "undefined" && typeof CHOICES_B !== "undefined") return index <= 36 ? CHOICES_A : CHOICES_B;
+  if(typeof CHOICES !== "undefined") return CHOICES;
+  return [];
+}
+
+function labelForItem(index, value){
+  const found = choicesForItem(index).find(c => String(c.value) === String(value));
+  return found ? found.label : String(value);
+}
+
+function humanizeKey(key){
+  return String(key || "").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function addScoreRows(prefix, value, out){
+  if(value && typeof value === "object" && !Array.isArray(value)){
+    Object.entries(value).forEach(([key, nested]) => addScoreRows(prefix ? prefix + "_" + key : key, nested, out));
+    return;
+  }
+  out.push({ key: prefix, label: humanizeKey(prefix), value });
+}
+
+function buildReadableResults(answers){
+  return ITEMS.map((text, idx) => {
+    const numero = idx + 1;
+    const pontuacao = answers[numero];
+    return {
+      numero,
+      pergunta: text,
+      resposta: labelForItem(numero, pontuacao),
+      pontuacao
+    };
+  });
+}
+
+function buildResultsMeta(scores, totalAll, durationSec, categoriaCsv){
+  const meta = [
+    { key: "pontuacao_total", label: "Pontuação total", value: totalAll },
+    { key: "categoria_csv", label: "Categorias", value: categoriaCsv },
+    { key: "duracao_segundos", label: "Duração em segundos", value: durationSec }
+  ];
+  Object.entries(scores || {}).forEach(([key, value]) => addScoreRows(key, value, meta));
+  return meta;
+}
+
+const formEl = document.querySelector("#form");
+formEl.addEventListener("submit", async (e) => {
   e.preventDefault();
   if(sending) return;
-  sending=true;
+  sending = true;
   hideBox("#msg");
 
-  const btn=$("#btnSubmit");
-  const originalText=btn.textContent;
-  btn.disabled=true;
-  btn.textContent="Enviando…";
+  const btn = document.querySelector("#btnSubmit");
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Enviando...";
 
   try{
     if(!patient) throw new Error("Sessão inválida. Recarregue o link.");
 
-    // 1. coleta respostas + valida faltantes
-    const answers={};
-    const qaList=[];
-    let firstMissing=null;
-
-    for(let i=1;i<=TOTAL_ITEMS;i++){
-      const qn=`q${String(i).padStart(2,"0")}`;
-      const sel=document.querySelector(`input[name="${qn}"]:checked`);
-      if(!sel && firstMissing===null){
-        firstMissing=i;
-      }
-      if(sel){
-        const val=Number(sel.value);
-        answers[i]=val;
-
-        // label amigável p/ metrics
-        const sourceChoices = i<=36 ? CHOICES_A : CHOICES_B;
-        const found = sourceChoices.find(c=>c.value===val) || {label:"",value:val};
-
-        qaList.push({
-          n:i,
-          q:ITEMS[i-1]||"",
-          label:found.label,
-          value:val
-        });
-      }
+    const answers = {};
+    let firstMissing = null;
+    for(let i = 1; i <= TOTAL_ITEMS; i++){
+      const qn = `q${String(i).padStart(2, "0")}`;
+      const sel = document.querySelector(`input[name="${qn}"]:checked`);
+      if(!sel && firstMissing === null) firstMissing = i;
+      if(sel) answers[i] = Number(sel.value);
     }
 
     if(firstMissing){
       setBox("#msg", `Responda o item ${firstMissing}.`, "warn");
-      document.getElementById(`lbl${String(firstMissing).padStart(2,"0")}`)?.scrollIntoView({behavior:"smooth",block:"center"});
-      sending=false;
-      btn.disabled=false;
-      btn.textContent=originalText;
+      document.getElementById(`lbl${String(firstMissing).padStart(2, "0")}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      sending = false;
+      btn.disabled = false;
+      btn.textContent = originalText;
       return;
     }
 
-    // 2. anti-duplicidade de novo antes de gravar
-    const again=await sheetSearch(SHEETS.SCORES,{ cpf:onlyDigits(patient.cpf), code:CODE });
-    if(again && again.length){
-      setBox("#msg","Este formulário já foi enviado anteriormente. Voltando ao portal…","ok");
-      setTimeout(goPortalWithToken,1000);
-      return;
-    }
-
-    // 3. escores / métricas
+    const cpf = normalizeCPF(patient.cpf || CPF);
+    const testCode = getTestCodeFromUrl();
+    const submittedAt = new Date().toISOString();
     const scores = computeScores(answers);
-    const categoria_csv = buildCategoriaCSV(scores);
-    const durationSec = Math.round((Date.now()-startAt)/1000);
-    const totalAll = Object.values(answers).reduce((s,v)=>s+v,0);
+    const categoriaCsv = buildCategoriaCSV(scores);
+    const durationSec = Math.round((Date.now() - startAt) / 1000);
+    const totalAll = Object.values(answers).reduce((sum, value) => sum + value, 0);
+    const resultsPayload = buildReadableResults(answers);
+    const resultsMetaPayload = buildResultsMeta(scores, totalAll, durationSec, categoriaCsv);
 
-    // 4. salvar na planilha
-    const row = {
-      result_id:`${patient.cpf}_${CODE}_${Date.now()}`,
-      token:TOKEN,
-      cpf:patient.cpf,
-      code:CODE,
-      source:"professor", // importante diferenciar de "paciente"
-      submitted_at:new Date().toISOString(),
-      total: totalAll,
-      categoria: categoria_csv,
-      metrics: "",
-      questions: JSON.stringify(qaList),
-      
-    };
-    await sheetCreate(SHEETS.SCORES,row);
+    const { data: patientRow, error: patientError } = await getPatientFormAccessByToken();
+    if(patientError) throw new Error("Erro ao validar paciente antes de salvar.");
+    if(!patientRow) throw new Error("CPF não encontrado.");
+    if(!isTestLiberado(patientRow.tests_liberados, testCode)) throw new Error("Teste não liberado.");
+    if(isTestFeito(patientRow.tests_feitos, testCode)){
+      setBox("#msg", "Este formulário já foi enviado anteriormente. Voltando ao portal...", "ok");
+      setTimeout(() => redirectToAreaPaciente(cpf), 900);
+      return;
+    }
 
-    // 5. marcar como feito
-    await sheetPatchBy(
-      SHEETS.PATIENTS,
-      "cpf",
-      patient.cpf,
-      {
-        [`${CODE}_FEITO`]:"sim",
-        [`${CODE}_FEITO_AT`]: new Date().toISOString()
-      }
-    );
+    const { error: insertError } = await supabaseClient.from("respostas").insert([{
+      cpf,
+      code: testCode,
+      submitted_at: submittedAt,
+      results: resultsPayload,
+      results_meta: resultsMetaPayload
+    }]);
+    if(insertError){
+      throw new Error(("Erro ao salvar respostas: " + (insertError.message || "")).trim());
+    }
 
-    // 6. limpar autosave e sair
+    const nextTestsFeitos = buildUpdatedTestsFeitos(patientRow.tests_feitos, testCode, submittedAt);
+    const { error: updateError } = await supabaseClient
+      .from("patients")
+      .update({ tests_feitos: nextTestsFeitos })
+      .eq("cpf", cpf);
+    if(updateError) console.warn("Resposta salva, mas falhou ao marcar teste como feito.", updateError);
+
     clearAutosave();
-    setBox("#msg","Formulário enviado. Retornando ao portal…","ok");
-    setTimeout(goPortalWithToken,1200);
-
+    setBox("#msg", "Formulário enviado. Retornando ao portal...", "ok");
+    setTimeout(() => redirectToAreaPaciente(cpf), 900);
   }catch(err){
     console.error(err);
     setBox("#msg", err.message || "Falha ao enviar. Tente novamente.", "err");
-    sending=false;
-    btn.disabled=false;
-    btn.textContent=originalText;
+    sending = false;
+    btn.disabled = false;
+    btn.textContent = originalText;
   }
-});
-</script>
+});</script>
 </body>
 </html>
