@@ -623,23 +623,16 @@ formEl.addEventListener("submit", async (e) => {
       return;
     }
 
-    const { error: insertError } = await supabaseClient.from("respostas").insert([{
-      cpf,
-      code: testCode,
-      submitted_at: submittedAt,
-      results: resultsPayload,
-      results_meta: resultsMetaPayload
-    }]);
-    if(insertError){
-      throw new Error(("Erro ao salvar respostas: " + (insertError.message || "")).trim());
+    const { error: submitError } = await supabaseClient.rpc("submit_public_patient_form_response", {
+      p_token: getTokenFromUrl(),
+      p_form_code: testCode,
+      p_form_name: "Inventário de Habilidades Sociais, Problemas de Comportamento e Competências Acadêmicas para Crianças - Respondido por professores",
+      p_results: resultsPayload,
+      p_results_meta: resultsMetaPayload
+    });
+    if(submitError){
+      throw new Error(("Erro ao salvar respostas: " + (submitError.message || "")).trim());
     }
-
-    const nextTestsFeitos = buildUpdatedTestsFeitos(patientRow.tests_feitos, testCode, submittedAt);
-    const { error: updateError } = await supabaseClient
-      .from("patients")
-      .update({ tests_feitos: nextTestsFeitos })
-      .eq("cpf", cpf);
-    if(updateError) console.warn("Resposta salva, mas falhou ao marcar teste como feito.", updateError);
 
     clearAutosave();
     setBox("#msg", "Formulário enviado. Retornando ao portal...", "ok");
